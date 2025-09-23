@@ -1,0 +1,290 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2822
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fnil\fcharset0 .AppleSystemUIFontMonospaced-Regular;\f1\fnil\fcharset0 .SFNS-Regular;\f2\fnil\fcharset0 HelveticaNeue-Bold;
+\f3\fnil\fcharset0 .SFNS-Semibold;\f4\froman\fcharset0 TimesNewRomanPSMT;}
+{\colortbl;\red255\green255\blue255;\red0\green0\blue0;\red14\green14\blue14;\red151\green0\blue126;
+}
+{\*\expandedcolortbl;;\csgray\c0;\cssrgb\c6700\c6700\c6700;\cssrgb\c66667\c5098\c56863;
+}
+\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\pardirnatural\partightenfactor0
+
+\f0\fs26 \cf2 # PHOTO-WORKER Blueprint (Single-Tenant) \'97 Temporal + S3 + Textract + Postgres\
+\
+Author: Senior Dev (for LLM Agent / Junior Dev)\
+Version: v1 (local Temporal dev first; easy to switch to Temporal Cloud later)\
+Task Queue: `recipe-process`\
+\
+---\
+\
+## Goal\
+Implement a Temporal worker service (**photo-worker**) that processes uploaded recipe images end-to-end:\
+1) Verify asset in S3 (exists, content-type, size, checksum)\
+2) Run AWS Textract to extract text (sync API for MVP)\
+3) Persist artifacts:\
+   - Store full OCR JSON in S3\
+   - Upsert metadata rows in Postgres\
+4) Return a small manifest to the caller (workflow result)\
+5) (Future) Optionally enqueue a **tagging** workflow that runs an LLM on the OCR JSON to create structured tags; store tags JSON in S3 and metadata in Postgres. Re-tagging must not re-run OCR.\
+\
+We are **single-tenant**, so no per-tenant isolation is needed in code or DB.\
+\
+---\
+\
+## High-Level Architecture & Choices\
+\
+- **Temporal** hosts the durable state (workflow history, retries). Workers are stateless processes that poll a **task queue** by name (`recipe-process`). No explicit queue provisioning is required.\
+- **Activities** are small, focused, idempotent units (I/O and external calls): S3 verify, Textract OCR, Postgres/S3 persist.\
+- **Artifacts vs Metadata:**\
+  - Artifacts (large JSON blobs like Textract output) go to **S3** (cheap, durable).\
+  - Metadata, pointers, and queryable fields go to **Postgres**.\
+- **Reprocessing:** Keep OCR JSON permanently in S3. Tagging can be re-run (new schema_version) without touching OCR.\
+- **Local-first:** Build against local Temporal dev server. Switching to Temporal Cloud later only changes connection (mTLS) config.\
+\
+---\
+\
+## Repository Layout (photo-worker)\
+\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\sl324\slmult1\pardirnatural\partightenfactor0
+
+\f1\fs28 \cf3 photo-worker/\
+requirements.txt\
+Dockerfile\
+.env.example\
+worker/\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\sl324\slmult1\pardirnatural\partightenfactor0
+
+\f2\b \cf3 init
+\f1\b0 .py\
+config.py                  # env parsing (Temporal host/namespace/queue etc.)\
+run_worker.py              # registers workflows + activities; polls queue\
+workflows/\
+
+\f2\b init
+\f1\b0 .py\
+image_processing.py      # ImageProcessingWorkflow (main orchestration)\
+activities/\
+
+\f2\b init
+\f1\b0 .py\
+io_s3.py                 # verify_and_locate_asset()\
+ocr_textract.py          # ocr_textract()\
+persist.py               # persist_artifacts()\
+tagging_llm.py           # (future) tag_from_ocr()\
+utils/\
+
+\f2\b init
+\f1\b0 .py\
+hashing.py               # sha256 utils\
+s3.py                    # small helpers: get/put JSON, stream download\
+db.py                    # psycopg connection pool helpers\
+tests/\
+test_workflow_smoke.py\
+test_activities.py\
+\
+Create a requirements.txt with all the depdencies\
+Create a .env local and .env prod with placeholder values\
+\
+\
+Here is a suggested postgres schema (feel free to edit)\
+---\
+\
+## Postgres Schema (DDL)\
+\
+```sql\
+-- recipes: one per uploaded/processed image\
+CREATE TABLE IF NOT EXISTS recipes (\
+  id UUID PRIMARY KEY,\
+  s3_raw_key TEXT NOT NULL,\
+  content_sha256 TEXT NOT NULL,\
+  status TEXT NOT NULL DEFAULT 'queued',     -- queued|running|succeeded|failed\
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()\
+);\
+\
+-- OCR pointer and summary\
+CREATE TABLE IF NOT EXISTS recipe_ocr (\
+  recipe_id UUID PRIMARY KEY REFERENCES recipes(id) ON DELETE CASCADE,\
+  s3_ocr_key TEXT NOT NULL,\
+  ocr_engine TEXT NOT NULL,                  -- 'textract'\
+  ocr_version TEXT NOT NULL,                 -- SDK/api version/date\
+  page_count INT DEFAULT 1,\
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()\
+);\
+\
+-- Tagging (future): multiple versions per recipe\
+CREATE TABLE IF NOT EXISTS recipe_tags (\
+  recipe_id UUID REFERENCES recipes(id) ON DELETE CASCADE,\
+  schema_version INT NOT NULL,\
+  s3_tags_key TEXT NOT NULL,\
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),\
+  PRIMARY KEY (recipe_id, schema_version)\
+);\
+\
+CREATE INDEX IF NOT EXISTS idx_recipes_sha ON recipes(content_sha256);\
+CREATE INDEX IF NOT EXISTS idx_recipes_status ON recipes(status);\
+\
+\
+Activity Contracts\
+class LocateAssetInput(BaseModel):\
+    bucket: str\
+    key: str\
+    expected_content_type: Optional[str] = None\
+\
+class LocatedAsset(BaseModel):\
+    bucket: str\
+    key: str\
+    content_type: str\
+    size_bytes: int\
+    sha256: str\
+\
+OCR\
+\
+class OcrInput(BaseModel):\
+    bucket: str\
+    key: str\
+    engine: Literal["textract"] = "textract"\
+\
+class OcrResult(BaseModel):\
+    ocr_engine: str           # 'textract'\
+    ocr_version: str          # SDK/api version or date\
+    s3_ocr_key: str          # artifacts/\{job_id\}/textract.json\
+    page_count: int\
+\
+Persisted artifacts\
+class PersistInput(BaseModel):\
+    job_id: str\
+    s3_raw_key: str\
+    sha256: str\
+    ocr_s3_key: str\
+    ocr_engine: str\
+    ocr_version: str\
+    page_count: int\
+\
+\pard\tqr\tx100\tx260\li260\fi-260\sl324\slmult1\sb240\partightenfactor0
+\cf3 	\'95	Upsert into 
+\f0 recipes
+\f1  (id, s3_raw_key, sha256, status=\'91succeeded\'92, updated_at=now()).\
+	\'95	Upsert into 
+\f0 recipe_ocr
+\f1  (recipe_id=id, s3_ocr_key, ocr_engine, ocr_version, page_count).\
+	\'95	Write 
+\f0 artifacts/\{job_id\}/manifest.json
+\f1  (small JSON with the above fields).\
+	\'95	
+\f2\b Idempotent
+\f1\b0 : use 
+\f0 INSERT ... ON CONFLICT ... DO UPDATE
+\f1  patterns.\
+\
+(Future: just implement the skeleton) - tagging with LLM\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\pardirnatural\partightenfactor0
+
+\f0\fs26 \cf4 class\cf2  TaggingInput(BaseModel):\
+    job_id: str\
+    ocr_s3_key: str\
+    schema_version: int\
+\
+class TaggingResult(BaseModel):\
+    s3_tags_key: str\
+\
+\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\sl324\slmult1\pardirnatural\partightenfactor0
+
+\f1\fs28 \cf3 Behavior:\
+\pard\tqr\tx100\tx260\li260\fi-260\sl324\slmult1\sb240\partightenfactor0
+\cf3 	\'95	Load OCR JSON from S3\
+	\'95	Run LLM; produce tags according to 
+\f0 schema_version
+\f1 \
+	\'95	Save to 
+\f0 tags/\{job_id\}/v\{schema_version\}.json
+\f1 \
+	\'95	Upsert 
+\f0 recipe_tags\
+\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\sl324\slmult1\pardirnatural\partightenfactor0
+
+\f3\b\fs34 \cf3 Workflow Orchestration \'97 workflows/image_processing.py
+\f1\b0\fs28 \cf3 \
+\pard\tqr\tx100\tx260\li260\fi-260\sl324\slmult1\sb240\partightenfactor0
+\cf3 	\'95	Name: 
+\f0 "image_processing_workflow"
+\f1 \
+	\'95	Input payload from API:\
+\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\li260\sl324\slmult1\pardirnatural\partightenfactor0
+\cf3 Steps:\
+\pard\tqr\tx660\tx820\li260\sl324\slmult1\sb240\partightenfactor0
+
+\f4 \cf3 	1.	
+\f0 verify_and_locate_asset
+\f1  (retry policy: 1s -> 30s backoff, max 5)\
+
+\f4 	2.	
+\f0 ocr_textract
+\f1  (retry similar, with slightly longer timeout)\
+
+\f4 	3.	
+\f0 persist_artifacts
+\f1  (retry short)\
+\pard\tqr\tx100\tx260\li260\fi-260\sl324\slmult1\sb240\partightenfactor0
+\cf3 	\'95	Return small dict:\
+\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\sl324\slmult1\pardirnatural\partightenfactor0
+
+\f3\b\fs34 \cf3 Worker Runner \'97 worker/run_worker.py
+\f1\b0\fs28 \cf3 \
+\
+Responsibilities:\
+\pard\tqr\tx100\tx260\li260\fi-260\sl324\slmult1\sb240\partightenfactor0
+\cf3 	\'95	Connect to Temporal (local dev target by default)\
+	\'95	Register workflows + activities\
+	\'95	Start polling on task queue 
+\f0 recipe-process
+\f1 \
+	\'95	Expose concurrency knobs via env (
+\f0 MAX_ACTIVITIES
+\f1 , 
+\f0 MAX_WF_TASKS
+\f1 )\
+\
+Pseudocode:\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\pardirnatural\partightenfactor0
+
+\f0\fs26 \cf2 client = Client.connect(TEMPORAL_TARGET, namespace=TEMPORAL_NAMESPACE)\
+Worker(\
+  client,\
+  task_queue=TEMPORAL_TASK_QUEUE,\
+  workflows=[ImageProcessingWorkflow],\
+  activities=[verify_and_locate_asset, ocr_textract, persist_artifacts],\
+  max_concurrent_activities=MAX_ACTIVITIES,\
+  max_concurrent_workflow_tasks=MAX_WF_TASKS\
+).run()\
+\
+\pard\tx560\tx1120\tx1680\tx2240\tx2800\tx3360\tx3920\tx4480\tx5040\tx5600\tx6160\tx6720\sl324\slmult1\pardirnatural\partightenfactor0
+
+\f3\b\fs34 \cf3 Idempotency Checklist
+\f1\b0\fs28 \cf3 \
+\pard\tqr\tx100\tx260\li260\fi-260\sl324\slmult1\sb240\partightenfactor0
+\cf3 	\'95	Use 
+\f2\b job_id
+\f1\b0  (from API) as the workflow ID and DB PK.\
+	\'95	Compute and store 
+\f2\b sha256
+\f1\b0  of the raw file for dedup / diagnostics.\
+	\'95	Write OCR output to deterministic key 
+\f0 artifacts/\{job_id\}/textract.json
+\f1 ; on retry, overwrite is fine.\
+	\'95	Postgres uses 
+\f0 ON CONFLICT (id)
+\f1  for 
+\f0 recipes
+\f1  and 
+\f0 (recipe_id)
+\f1  for 
+\f0 recipe_ocr
+\f1  to update, not duplicate.\
+	\'95	Do 
+\f2\b not
+\f1\b0  rely on in-memory state; every activity must be re-runnable safely.\
+}
