@@ -12,7 +12,7 @@ class TemporalConfig(BaseModel):
 
 
 class S3Config(BaseModel):
-    region: str = "us-east-1"
+    region: str = "us-west-2"
     bucket: str
 
 
@@ -31,9 +31,8 @@ class DatabaseConfig(BaseModel):
 
 
 class AWSConfig(BaseModel):
-    region: str = "us-east-1"
-    access_key_id: Optional[str] = None
-    secret_access_key: Optional[str] = None
+    region: str = "us-west-2"
+    profile_name: Optional[str] = None
 
 
 class Config(BaseModel):
@@ -54,22 +53,27 @@ def load_config() -> Config:
             max_concurrent_workflow_tasks=int(os.getenv("MAX_WF_TASKS", "5"))
         ),
         s3=S3Config(
-            region=os.getenv("S3_REGION", "us-east-1"),
-            bucket=os.getenv("S3_BUCKET", "photo-worker-bucket")
+            region=os.getenv("S3_REGION", "us-west-2"),
+            bucket=os.getenv("S3_BUCKET", "my-ocr-processed-bucket-070703032025")
         ),
         database=DatabaseConfig(
-            host=os.getenv("DB_HOST", "localhost"),
+            host=os.getenv(
+                "DB_HOST", "photo-dev-dev-pg.cr8uowes62h6.us-west-2.rds.amazonaws.com"
+            ),
             port=int(os.getenv("DB_PORT", "5432")),
             database=os.getenv("DB_NAME", "photo_worker"),
-            username=os.getenv("DB_USERNAME", "postgres"),
-            password=os.getenv("DB_PASSWORD", ""),
+            username=os.getenv("DB_USERNAME", "appuser"),
+            password=os.getenv("DB_PASSWORD", None),
             pool_size=int(os.getenv("DB_POOL_SIZE", "10")),
             max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "20"))
         ),
         aws=AWSConfig(
-            region=os.getenv("AWS_REGION", "us-east-1"),
-            access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-            secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY")
+            region=os.getenv("AWS_REGION", "us-west-2"),
+            profile_name=(
+                os.getenv("AWS_PROFILE")
+                or os.getenv("AWS_DEFAULT_PROFILE")
+                or os.getenv("AWS_PROFILE_NAME")
+            )
         ),
         log_level=os.getenv("LOG_LEVEL", "INFO")
     )

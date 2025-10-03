@@ -18,7 +18,7 @@ The photo-worker requires the following AWS services:
 ```bash
 # Replace 'your-org-photo-worker' with your desired bucket name
 BUCKET_NAME="your-org-photo-worker-prod"
-AWS_REGION="us-east-1"
+AWS_REGION="us-west-2"
 
 # Create bucket
 aws s3 mb s3://$BUCKET_NAME --region $AWS_REGION
@@ -187,11 +187,11 @@ aws iam attach-role-policy \
 #### Create Instance Profile (for EC2 deployment)
 ```bash
 # Create instance profile
-aws iam create-instance-profile --instance-profile-name PhotoWorkerInstanceProfile
+aws iam create-instance-profile --instance-profile-name photo-dev-dev-worker-instance-profile
 
 # Add role to instance profile
 aws iam add-role-to-instance-profile \
-  --instance-profile-name PhotoWorkerInstanceProfile \
+  --instance-profile-name photo-dev-dev-worker-instance-profile \
   --role-name PhotoWorkerRole
 ```
 
@@ -221,15 +221,15 @@ Submit requests through AWS Support Console if you need higher limits.
 ```bash
 # Create RDS PostgreSQL instance
 aws rds create-db-instance \
-  --db-instance-identifier photo-worker-db \
+  --db-instance-identifier photo-dev-dev-pg \
   --db-instance-class db.t3.micro \
   --engine postgres \
   --engine-version 15.4 \
-  --master-username photoworker \
-  --master-user-password "YourSecurePassword123!" \
+  --master-username appuser \
+  --master-user-password "<sensitive>" \
   --allocated-storage 20 \
   --storage-type gp2 \
-  --vpc-security-group-ids sg-xxxxxxxxx \
+  --vpc-security-group-ids sg-0c8205f5e517d263d \
   --db-subnet-group-name your-db-subnet-group \
   --backup-retention-period 7 \
   --storage-encrypted \
@@ -255,17 +255,17 @@ aws ec2 create-security-group \
 # Add rules (adjust as needed)
 # Allow outbound HTTPS for AWS APIs
 aws ec2 authorize-security-group-egress \
-  --group-id sg-xxxxxxxxx \
+  --group-id sg-0c6b18fb20c16059d \
   --protocol tcp \
   --port 443 \
   --cidr 0.0.0.0/0
 
 # Allow database access (if using RDS)
 aws ec2 authorize-security-group-egress \
-  --group-id sg-xxxxxxxxx \
+  --group-id sg-0c6b18fb20c16059d \
   --protocol tcp \
   --port 5432 \
-  --source-group sg-yyyyyyyyy  # RDS security group
+  --source-group sg-0c8205f5e517d263d  # RDS security group
 ```
 
 ### 6. Monitoring and Logging
@@ -325,7 +325,7 @@ aws cloudwatch put-metric-alarm \
 aws secretsmanager create-secret \
   --name photo-worker/database \
   --description "Database credentials for photo worker" \
-  --secret-string '{"username":"photoworker","password":"YourSecurePassword123!","host":"your-db-host","port":"5432","dbname":"photo_worker"}'
+  --secret-string '{"username":"appuser","password":"<sensitive>","host":"photo-dev-dev-pg.cr8uowes62h6.us-west-2.rds.amazonaws.com","port":"5432","dbname":"photo_worker"}'
 ```
 
 ### 2. Encryption
@@ -363,7 +363,7 @@ aws secretsmanager create-secret \
 variable "bucket_name" {
   description = "S3 bucket name for photo worker"
   type        = string
-  default     = "your-org-photo-worker"
+  default     = "my-ocr-processed-bucket-070703032025"
 }
 
 variable "environment" {
@@ -375,7 +375,7 @@ variable "environment" {
 variable "region" {
   description = "AWS region"
   type        = string
-  default     = "us-east-1"
+  default     = "us-west-2"
 }
 
 variable "db_instance_class" {
@@ -414,14 +414,14 @@ After completing the infrastructure setup, you'll need these values for your `.e
 
 ```bash
 # From your infrastructure setup
-S3_BUCKET="your-actual-bucket-name"
-AWS_REGION="us-east-1"
-DB_HOST="your-rds-endpoint.region.rds.amazonaws.com"
+S3_BUCKET="my-ocr-processed-bucket-070703032025"
+AWS_REGION="us-west-2"
+DB_HOST="photo-dev-dev-pg.cr8uowes62h6.us-west-2.rds.amazonaws.com"
 DB_NAME="photo_worker"
-DB_USERNAME="photoworker"
-DB_PASSWORD="stored-in-secrets-manager"
+DB_USERNAME="appuser"
+DB_PASSWORD="<sensitive>"
 
-# For EC2/ECS deployment
-AWS_ACCESS_KEY_ID="use-iam-role-instead"
-AWS_SECRET_ACCESS_KEY="use-iam-role-instead"
+# For EC2/ECS deployment rely on the instance or task role
+# For local debugging, optionally choose an AWS CLI profile
+# AWS_PROFILE="photo-worker-dev"
 ```

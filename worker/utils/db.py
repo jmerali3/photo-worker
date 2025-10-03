@@ -2,10 +2,11 @@ import logging
 from contextlib import contextmanager
 from typing import Dict, Any, List, Optional, Generator
 import psycopg
-from psycopg.pool import ConnectionPool
+from psycopg_pool import ConnectionPool
 from psycopg.rows import dict_row
 
 from worker.config import DatabaseConfig
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,38 @@ class DatabaseHelper:
         if self._pool:
             self._pool.close()
             logger.info("Database connection pool closed")
+
+
+# Module-level shared helper for reusing a single connection pool
+_SHARED_HELPER: Optional[DatabaseHelper] = None
+_INIT_LOCK = threading.Lock()
+
+
+def get_shared_db_helper(config: DatabaseConfig) -> DatabaseHelper:
+    """Return a process-wide shared DatabaseHelper with an initialized pool.
+
+    Initializes the pool on first use and reuses it for subsequent calls.
+    """
+    global _SHARED_HELPER
+    if _SHARED_HELPER is None:
+        with _INIT_LOCK:
+            if _SHARED_HELPER is None:
+                helper = DatabaseHelper(config)
+                helper.initialize_pool()
+                _SHARED_HELPER = helper
+                logger.info("Shared database helper initialized")
+    return _SHARED_HELPER
+
+
+def close_shared_pool() -> None:
+    """Close the shared connection pool if initialized."""
+    global _SHARED_HELPER
+    if _SHARED_HELPER is not None:
+        try:
+            _SHARED_HELPER.close_pool()
+        finally:
+            _SHARED_HELPER = None
+            logger.info("Shared database helper cleared")
 
     @contextmanager
     def get_connection(self) -> Generator[psycopg.Connection, None, None]:

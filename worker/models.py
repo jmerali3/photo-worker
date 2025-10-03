@@ -1,5 +1,5 @@
 from typing import Optional, Dict, Any, Literal
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 
 
@@ -63,6 +63,7 @@ class TaggingResult(BaseModel):
 
 
 class WorkflowResult(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     job_id: str
     status: str
     recipe_id: str

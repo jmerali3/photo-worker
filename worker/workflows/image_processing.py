@@ -5,14 +5,10 @@ from temporalio import workflow
 from worker.models import (
     WorkflowInput, WorkflowResult, LocateAssetInput, OcrInput, PersistInput
 )
-from worker.activities.io_s3 import verify_and_locate_asset
-from worker.activities.ocr_textract import ocr_textract
-from worker.activities.persist import persist_artifacts
-
 logger = logging.getLogger(__name__)
 
 
-@workflow.defn
+@workflow.defn(name="image_processing_workflow")
 class ImageProcessingWorkflow:
     """
     Main workflow for processing recipe images end-to-end.
@@ -29,8 +25,15 @@ class ImageProcessingWorkflow:
     """
 
     @workflow.run
-    async def run(self, input_data: WorkflowInput) -> WorkflowResult:
+    async def run(self, input_data: WorkflowInput | dict) -> WorkflowResult:
         """Execute the image processing workflow."""
+        # Allow plain dict payloads from callers that don't share the worker models
+        if isinstance(input_data, dict):
+            input_data = WorkflowInput(**input_data)
+
+        if not input_data.job_id:
+            raise ValueError("WorkflowInput.job_id is required")
+
         workflow.logger.info(f"Starting image processing workflow for job {input_data.job_id}")
 
         # Step 1: Verify and locate asset in S3
@@ -42,7 +45,7 @@ class ImageProcessingWorkflow:
         )
 
         located_asset = await workflow.execute_activity(
-            verify_and_locate_asset,
+            "verify_and_locate_asset",
             locate_input,
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=workflow.RetryPolicy(
@@ -67,7 +70,7 @@ class ImageProcessingWorkflow:
         )
 
         ocr_result = await workflow.execute_activity(
-            ocr_textract,
+            "ocr_textract",
             ocr_input,
             start_to_close_timeout=timedelta(minutes=5),  # Textract can take a while
             retry_policy=workflow.RetryPolicy(
@@ -96,7 +99,7 @@ class ImageProcessingWorkflow:
         )
 
         persist_result = await workflow.execute_activity(
-            persist_artifacts,
+            "persist_artifacts",
             persist_input,
             start_to_close_timeout=timedelta(seconds=30),
             retry_policy=workflow.RetryPolicy(

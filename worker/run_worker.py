@@ -9,8 +9,10 @@ from typing import Optional
 from temporalio import workflow
 from temporalio.client import Client
 from temporalio.worker import Worker
+from temporalio.worker._workflow_instance import UnsandboxedWorkflowRunner
 
 from worker.config import load_config
+from worker.utils.db import get_shared_db_helper, close_shared_pool
 from worker.workflows.image_processing import ImageProcessingWorkflow
 from worker.activities.io_s3 import verify_and_locate_asset
 from worker.activities.ocr_textract import ocr_textract
@@ -48,6 +50,14 @@ class WorkerRunner:
                 f"Connected to Temporal at {self.config.temporal.target} "
                 f"(namespace: {self.config.temporal.namespace})"
             )
+
+            # Initialize shared DB pool early so activities can reuse it
+            try:
+                get_shared_db_helper(self.config.database)
+                logger.info("Shared database pool initialized")
+            except Exception as db_init_err:
+                logger.error(f"Failed to initialize shared DB pool: {db_init_err}")
+                raise
         except Exception as e:
             logger.error(f"Failed to connect to Temporal: {e}")
             raise
@@ -72,6 +82,7 @@ class WorkerRunner:
             task_queue=self.config.temporal.task_queue,
             workflows=workflows,
             activities=activities,
+            workflow_runner=UnsandboxedWorkflowRunner(),
             max_concurrent_activities=self.config.temporal.max_concurrent_activities,
             max_concurrent_workflow_tasks=self.config.temporal.max_concurrent_workflow_tasks
         )
@@ -137,8 +148,21 @@ class WorkerRunner:
         finally:
             # Close client connection
             if self.client:
-                await self.client.close()
-                logger.info("Temporal client connection closed")
+                close_attr = getattr(self.client, "close", None)
+                if callable(close_attr):
+                    try:
+                        await close_attr()  # type: ignore[misc]
+                    except TypeError:
+                        # Temporal client does not expose an async close method in 1.7.0
+                        pass
+                    else:
+                        logger.info("Temporal client connection closed")
+
+            # Close shared DB pool
+            try:
+                close_shared_pool()
+            except Exception as e:
+                logger.warning(f"Error closing shared DB pool: {e}")
 
 
 async def main():

@@ -17,9 +17,8 @@ class TestVerifyAndLocateAsset:
         """Test successful asset verification."""
         # Setup mocks
         mock_config = Mock()
-        mock_config.aws.region = "us-east-1"
-        mock_config.aws.access_key_id = "test-key"
-        mock_config.aws.secret_access_key = "test-secret"
+        mock_config.aws.region = "us-west-2"
+        mock_config.aws.profile_name = "test-profile"
         mock_load_config.return_value = mock_config
 
         mock_s3_helper = Mock()
@@ -59,6 +58,8 @@ class TestVerifyAndLocateAsset:
         """Test asset verification when object doesn't exist."""
         # Setup mocks
         mock_config = Mock()
+        mock_config.aws.region = "us-west-2"
+        mock_config.aws.profile_name = "test-profile"
         mock_load_config.return_value = mock_config
 
         mock_s3_helper = Mock()
@@ -77,6 +78,8 @@ class TestVerifyAndLocateAsset:
         """Test asset verification with content type mismatch."""
         # Setup mocks
         mock_config = Mock()
+        mock_config.aws.region = "us-west-2"
+        mock_config.aws.profile_name = "test-profile"
         mock_load_config.return_value = mock_config
 
         mock_s3_helper = Mock()
@@ -102,16 +105,15 @@ class TestOcrTextract:
 
     @patch('worker.activities.ocr_textract.activity.info')
     @patch('worker.activities.ocr_textract.S3Helper')
-    @patch('worker.activities.ocr_textract.boto3.client')
+    @patch('worker.activities.ocr_textract.create_boto3_session')
     @patch('worker.activities.ocr_textract.load_config')
-    async def test_ocr_textract_success(self, mock_load_config, mock_boto3_client,
+    async def test_ocr_textract_success(self, mock_load_config, mock_create_session,
                                        mock_s3_helper_class, mock_activity_info):
         """Test successful Textract OCR processing."""
         # Setup mocks
         mock_config = Mock()
-        mock_config.aws.region = "us-east-1"
-        mock_config.aws.access_key_id = "test-key"
-        mock_config.aws.secret_access_key = "test-secret"
+        mock_config.aws.region = "us-west-2"
+        mock_config.aws.profile_name = "test-profile"
         mock_config.s3.bucket = "worker-bucket"
         mock_load_config.return_value = mock_config
 
@@ -122,7 +124,9 @@ class TestOcrTextract:
 
         # Mock Textract response
         mock_textract_client = Mock()
-        mock_boto3_client.return_value = mock_textract_client
+        mock_session = Mock()
+        mock_session.client.return_value = mock_textract_client
+        mock_create_session.return_value = mock_session
         mock_textract_client.detect_document_text.return_value = {
             'DetectDocumentTextModelVersion': '2023.01.01',
             'DocumentMetadata': {'Pages': 1},
@@ -152,13 +156,15 @@ class TestOcrTextract:
         mock_textract_client.detect_document_text.assert_called_once()
 
     @patch('worker.activities.ocr_textract.activity.info')
-    @patch('worker.activities.ocr_textract.boto3.client')
+    @patch('worker.activities.ocr_textract.create_boto3_session')
     @patch('worker.activities.ocr_textract.load_config')
-    async def test_ocr_textract_invalid_document(self, mock_load_config, mock_boto3_client,
+    async def test_ocr_textract_invalid_document(self, mock_load_config, mock_create_session,
                                                 mock_activity_info):
         """Test Textract OCR with invalid document."""
         # Setup mocks
         mock_config = Mock()
+        mock_config.aws.region = "us-west-2"
+        mock_config.aws.profile_name = "test-profile"
         mock_load_config.return_value = mock_config
 
         mock_info = Mock()
@@ -167,7 +173,9 @@ class TestOcrTextract:
 
         # Mock Textract error
         mock_textract_client = Mock()
-        mock_boto3_client.return_value = mock_textract_client
+        mock_session = Mock()
+        mock_session.client.return_value = mock_textract_client
+        mock_create_session.return_value = mock_session
 
         error_response = {'Error': {'Code': 'UnsupportedDocumentException', 'Message': 'Unsupported format'}}
         mock_textract_client.detect_document_text.side_effect = ClientError(error_response, 'DetectDocumentText')
@@ -191,7 +199,8 @@ class TestPersistArtifacts:
         # Setup mocks
         mock_config = Mock()
         mock_config.database = Mock()
-        mock_config.aws = Mock()
+        mock_config.aws.region = "us-west-2"
+        mock_config.aws.profile_name = "test-profile"
         mock_config.s3.bucket = "worker-bucket"
         mock_load_config.return_value = mock_config
 
@@ -239,6 +248,8 @@ class TestPersistArtifacts:
         """Test persistence failure when database operation fails."""
         # Setup mocks
         mock_config = Mock()
+        mock_config.aws.region = "us-west-2"
+        mock_config.aws.profile_name = "test-profile"
         mock_load_config.return_value = mock_config
 
         # Mock database helper with failure

@@ -25,7 +25,7 @@ A Temporal worker service that processes uploaded recipe images end-to-end using
 
 2. **PostgreSQL** database running locally
 
-3. **AWS credentials** configured for S3 and Textract access
+3. **AWS credentials** configured via AWS CLI profile for S3 and Textract access
 
 ### Setup
 
@@ -65,8 +65,7 @@ Environment variables (see `.env.example`):
 
 ### AWS
 - `AWS_REGION`: AWS region for S3/Textract
-- `AWS_ACCESS_KEY_ID`: AWS access key
-- `AWS_SECRET_ACCESS_KEY`: AWS secret key
+- `AWS_PROFILE` (optional): AWS CLI profile to use; defaults to the CLI's active profile
 - `S3_BUCKET`: S3 bucket for storing artifacts
 
 ### Database

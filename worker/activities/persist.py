@@ -3,7 +3,7 @@ from datetime import datetime
 from temporalio import activity
 
 from worker.models import PersistInput, PersistResult
-from worker.utils.db import DatabaseHelper
+from worker.utils.db import get_shared_db_helper
 from worker.utils.s3 import S3Helper
 from worker.config import load_config
 
@@ -26,15 +26,13 @@ async def persist_artifacts(input_data: PersistInput) -> PersistResult:
     """
     config = load_config()
 
-    # Initialize database helper
-    db_helper = DatabaseHelper(config.database)
-    db_helper.initialize_pool()
+    # Get shared database helper (pool initialized once per process)
+    db_helper = get_shared_db_helper(config.database)
 
     # Initialize S3 helper
     s3_helper = S3Helper(
         region=config.aws.region,
-        aws_access_key_id=config.aws.access_key_id,
-        aws_secret_access_key=config.aws.secret_access_key
+        profile_name=config.aws.profile_name,
     )
 
     try:
@@ -118,8 +116,5 @@ async def persist_artifacts(input_data: PersistInput) -> PersistResult:
         raise RuntimeError(f"Persistence failed for job {input_data.job_id}: {str(e)}")
 
     finally:
-        # Clean up database connection pool
-        try:
-            db_helper.close_pool()
-        except Exception as cleanup_error:
-            logger.warning(f"Error closing database pool: {cleanup_error}")
+        # Pool is shared; do not close here
+        pass

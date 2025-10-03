@@ -1,22 +1,25 @@
 import json
 import logging
-from typing import Dict, Any, Optional
-import boto3
-from botocore.exceptions import ClientError, NoCredentialsError
 from io import BytesIO
+from typing import Dict, Any, Optional
 
+from botocore.exceptions import ClientError, NoCredentialsError
+
+from worker.utils.aws import create_boto3_session
 from worker.utils.hashing import compute_sha256_from_stream
 
 logger = logging.getLogger(__name__)
 
 
 class S3Helper:
-    def __init__(self, region: str = "us-east-1", aws_access_key_id: Optional[str] = None,
-                 aws_secret_access_key: Optional[str] = None):
-        session = boto3.Session(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            region_name=region
+    def __init__(
+        self,
+        region: str = "us-west-2",
+        profile_name: Optional[str] = None,
+    ):
+        session = create_boto3_session(
+            region=region,
+            profile_name=profile_name,
         )
         self.s3_client = session.client('s3')
         self.region = region

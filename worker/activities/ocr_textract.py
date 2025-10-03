@@ -1,11 +1,10 @@
 import logging
-from typing import Dict, Any
-import boto3
 from botocore.exceptions import ClientError
 from temporalio import activity
 
 from worker.models import OcrInput, OcrResult
 from worker.utils.s3 import S3Helper
+from worker.utils.aws import create_boto3_session
 from worker.config import load_config
 
 logger = logging.getLogger(__name__)
@@ -28,17 +27,15 @@ async def ocr_textract(input_data: OcrInput) -> OcrResult:
     config = load_config()
 
     # Initialize AWS clients
-    textract_client = boto3.client(
-        'textract',
-        region_name=config.aws.region,
-        aws_access_key_id=config.aws.access_key_id,
-        aws_secret_access_key=config.aws.secret_access_key
+    session = create_boto3_session(
+        region=config.aws.region,
+        profile_name=config.aws.profile_name,
     )
+    textract_client = session.client('textract')
 
     s3_helper = S3Helper(
         region=config.aws.region,
-        aws_access_key_id=config.aws.access_key_id,
-        aws_secret_access_key=config.aws.secret_access_key
+        profile_name=config.aws.profile_name,
     )
 
     # Get job_id from activity info for deterministic S3 key

@@ -25,8 +25,7 @@ async def verify_and_locate_asset(input_data: LocateAssetInput) -> LocatedAsset:
     config = load_config()
     s3_helper = S3Helper(
         region=config.aws.region,
-        aws_access_key_id=config.aws.access_key_id,
-        aws_secret_access_key=config.aws.secret_access_key
+        profile_name=config.aws.profile_name,
     )
 
     logger.info(f"Verifying asset s3://{input_data.bucket}/{input_data.key}")

@@ -1,9 +1,10 @@
 import logging
+from datetime import datetime, timezone
 from temporalio import activity
 
 from worker.models import TaggingInput, TaggingResult
 from worker.utils.s3 import S3Helper
-from worker.utils.db import DatabaseHelper
+from worker.utils.db import get_shared_db_helper
 from worker.config import load_config
 
 logger = logging.getLogger(__name__)
@@ -33,12 +34,10 @@ async def tag_from_ocr(input_data: TaggingInput) -> TaggingResult:
     # Initialize helpers
     s3_helper = S3Helper(
         region=config.aws.region,
-        aws_access_key_id=config.aws.access_key_id,
-        aws_secret_access_key=config.aws.secret_access_key
+        profile_name=config.aws.profile_name,
     )
 
-    db_helper = DatabaseHelper(config.database)
-    db_helper.initialize_pool()
+    db_helper = get_shared_db_helper(config.database)
 
     try:
         # Load OCR JSON from S3
@@ -57,7 +56,7 @@ async def tag_from_ocr(input_data: TaggingInput) -> TaggingResult:
                 'message': 'LLM tagging not yet implemented',
                 'extracted_text_length': len(str(ocr_data.get('textract_response', {}))),
             },
-            'generated_at': '2024-01-01T00:00:00Z'  # TODO: Use actual timestamp
+            'generated_at': datetime.now(timezone.utc).isoformat()
         }
 
         # Create deterministic S3 key for tags
@@ -89,7 +88,5 @@ async def tag_from_ocr(input_data: TaggingInput) -> TaggingResult:
         raise RuntimeError(f"Tagging failed for job {input_data.job_id}: {str(e)}")
 
     finally:
-        try:
-            db_helper.close_pool()
-        except Exception as cleanup_error:
-            logger.warning(f"Error closing database pool: {cleanup_error}")
+        # Shared pool; do not close here
+        pass
